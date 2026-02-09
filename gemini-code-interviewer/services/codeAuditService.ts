@@ -49,18 +49,32 @@ export class CodeAuditService {
   /**
    * Main entry point: Analyze code using AI with detailed evaluation
    */
-  static async analyzeCode(code: string, language: string = 'typescript', questionContext?: string): Promise<AuditResult> {
+  static async analyzeCode(
+    code: string, 
+    language: string = 'typescript', 
+    questionContext?: string,
+    messages: {role: string, text: string}[] = []
+  ): Promise<AuditResult> {
     const timestamp = Date.now();
     
     try {
       // Send to Gemini AI for comprehensive analysis
       const ai = new GoogleGenAI({ apiKey: process.env.REACT_APP_API_KEY || process.env.API_KEY });
       
+      const transcriptText = messages.length > 0
+        ? messages.map(m => `[${m.role.toUpperCase()}]: ${m.text}`).join('\n')
+        : "No interview transcript available.";
+
       const contextPrompt = questionContext 
         ? `\n\nCONTEXT - THE CANDIDATE WAS ASKED THE FOLLOWING QUESTION:\n"${questionContext}"\n\nIMPORTANT: Evaluate if the code CORRECTLY solves THIS specific problem. Points should be deducted significantly if the solution does not address the question requirements, even if the code itself is valid.` 
         : '';
 
       const analysisPrompt = `You are an expert code reviewer conducting a professional code audit. Analyze this code thoroughly and provide structured feedback.${contextPrompt}
+
+INTERVIEW TRANSCRIPT (for context on intent and explanation):
+\`\`\`text
+${transcriptText}
+\`\`\`
 
 CODE TO ANALYZE:
 \`\`\`${language}
@@ -104,7 +118,7 @@ EVALUATION CRITERIA:
 Be thorough but fair. Rate each criterion from 0-100 where 100 is perfect.`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3-flash-preview',
         contents: analysisPrompt,
       });
 

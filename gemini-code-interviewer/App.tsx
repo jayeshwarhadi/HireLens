@@ -746,7 +746,8 @@ ALWAYS USE VOICE. Speak naturally as if coaching them in real-time.`;
         <CodeAudit 
           code={code} 
           language="typescript" 
-          onClose={() => setShowAudit(false)} 
+          onClose={() => setShowAudit(false)}
+          messages={messages.map(m => ({role: m.role, text: m.text}))}
         />
       )}
     </div>

@@ -26,16 +26,7 @@ const CODE_TEMPLATES: Record<AlgorithmType, string> = {
   }
   return chars.join('');
 }`,
-  [AlgorithmType.LINKED_LIST]: `function reverseList(head) {
-  let prev = null, curr = head;
-  while(curr) {
-    let next = curr.next;
-    curr.next = prev;
-    prev = curr;
-    curr = next;
-  }
-  return prev;
-}`,
+  [AlgorithmType.LINKED_LIST]: 'function reverseList(head) {\n  let prev = null, curr = head;\n  while(curr) {\n    let next = curr.next;\n    curr.next = prev;\n    prev = curr;\n    curr = next;\n  }\n  return prev;\n}',
   [AlgorithmType.BINARY_TREE]: `function invert(root) {
   if (!root) return null;
   [root.left, root.right] = [root.right, root.left];
@@ -65,11 +56,11 @@ const CODE_TEMPLATES: Record<AlgorithmType, string> = {
 const INPUT_TEMPLATES: Record<AlgorithmType, string> = {
   [AlgorithmType.ARRAY]: '[12, 5, 8, 2, 9, 4, 1]',
   [AlgorithmType.STRINGS]: '"ALGO_VIS"',
-  [AlgorithmType.LINKED_LIST]: '{"val": 1, "next": {"val": 2}}',
-  [AlgorithmType.BINARY_TREE]: '{"val": 10, "left": {"val": 5}}',
+  [AlgorithmType.LINKED_LIST]: '{"value": 1, "next": {"value": 2}}',
+  [AlgorithmType.BINARY_TREE]: '{"value": 10, "left": {"value": 5}, "right": {"value": 15}}',
   [AlgorithmType.DP]: '8',
   [AlgorithmType.BITS]: '255',
-  [AlgorithmType.GRAPH]: '{"nodes": [{"id": "A"}], "edges": []}'
+  [AlgorithmType.GRAPH]: '{"nodes": [{"id": "A"}, {"id": "B"}], "edges": [{"from": "A", "to": "B"}]}'
 };
 
 const App: React.FC = () => {

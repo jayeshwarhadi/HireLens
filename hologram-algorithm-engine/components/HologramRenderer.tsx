@@ -73,13 +73,17 @@ const HologramRenderer: React.FC<HologramRendererProps> = ({ metadata, currentSt
     else if (isCompared) baseClass = 'bg-amber-500/90 border-amber-300 text-white scale-105 z-10 shadow-xl shadow-amber-500/40 ring-4 ring-amber-500/20';
     else if (isModified) baseClass = 'bg-rose-500/90 border-rose-300 text-white shadow-xl shadow-rose-500/40';
 
+    // Sanitize coordinates
+    const safeX = Number.isFinite(x) ? x : 0;
+    const safeY = Number.isFinite(y) ? y : 0;
+
     return (
       <div 
         key={idx}
         className={`absolute flex items-center justify-center transition-all duration-300 border backdrop-blur-md
           ${variant === 'circle' ? 'rounded-full w-12 h-12' : 'rounded-2xl w-14 h-14'}
           ${baseClass} cursor-grab active:cursor-grabbing group`}
-        style={{ left: x, top: y, transform: `translate(-50%, -50%)` }}
+        style={{ left: safeX, top: safeY, transform: `translate(-50%, -50%)` }}
       >
         <span className="text-sm font-bold font-mono drop-shadow-md">{cleanValue}</span>
       </div>

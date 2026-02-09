@@ -276,57 +276,52 @@ const Visualizer: React.FC<VisualizerProps> = ({ state, handData }) => {
           const grabbedId = grabbedIdRef.current;
           const grabbedPos = elementPositions[grabbedId];
           
-          // Safety check - if position doesn't exist, just reset
-          if (!grabbedPos || !grabbedStartPosRef.current) {
-            grabbedIdRef.current = null;
-            grabbedStartPosRef.current = null;
-          } else {
-            // Find the closest element to swap with
-            let swapTarget: string | null = null;
-            let minDist = Infinity;
+          // Find the closest element to swap with
+          let swapTarget: string | null = null;
+          let minDist = Infinity;
+          
+          (Object.entries(elementPositions) as [string, { x: number; y: number }][]).forEach(([id, pos]) => {
+            if (id === grabbedId) return;
             
-            (Object.entries(elementPositions) as [string, { x: number; y: number }][]).forEach(([id, pos]) => {
-              if (id === grabbedId || !pos) return;
-              
-              const centerX = pos.x + blockW / 2;
-              const centerY = pos.y + blockH / 2;
-              const grabbedCenterX = grabbedPos.x + blockW / 2;
-              const grabbedCenterY = grabbedPos.y + blockH / 2;
-              
-              const distBetween = Math.sqrt(
-                Math.pow(grabbedCenterX - centerX, 2) + 
-                Math.pow(grabbedCenterY - centerY, 2)
-              );
-              
-              // Only swap if close enough (within 1.5x block size)
-              if (distBetween < (blockW + gap) * 1.2 && distBetween < minDist) {
-                minDist = distBetween;
-                swapTarget = id;
-              }
-            });
+            const centerX = pos.x + blockW / 2;
+            const centerY = pos.y + blockH / 2;
+            const grabbedCenterX = grabbedPos.x + blockW / 2;
+            const grabbedCenterY = grabbedPos.y + blockH / 2;
+            
+            const distBetween = Math.sqrt(
+              Math.pow(grabbedCenterX - centerX, 2) + 
+              Math.pow(grabbedCenterY - centerY, 2)
+            );
+            
+            // Only swap if close enough (within 1.5x block size)
+            if (distBetween < (blockW + gap) * 1.2 && distBetween < minDist) {
+              minDist = distBetween;
+              swapTarget = id;
+            }
+          });
 
-            const originalPos = { ...grabbedStartPosRef.current };
+          if (swapTarget && grabbedStartPosRef.current) {
+            // Perform swap - grabbed element goes to target's position, target goes to grabbed's original position
+            const targetPos = { ...elementPositions[swapTarget] };
+            const originalPos = grabbedStartPosRef.current;
             
-            if (swapTarget && elementPositions[swapTarget]) {
-              // Perform swap - grabbed element goes to target's position, target goes to grabbed's original position
-              const targetPos = { ...elementPositions[swapTarget] };
-              
+            setElementPositions(prev => ({
+              ...prev,
+              [grabbedId]: targetPos,
+              [swapTarget!]: originalPos
+            }));
+          } else {
+            // No swap target - return to original position
+            if (grabbedStartPosRef.current) {
               setElementPositions(prev => ({
                 ...prev,
-                [grabbedId]: targetPos,
-                [swapTarget!]: originalPos
-              }));
-            } else {
-              // No swap target - return to original position
-              setElementPositions(prev => ({
-                ...prev,
-                [grabbedId]: originalPos
+                [grabbedId]: grabbedStartPosRef.current!
               }));
             }
-            
-            grabbedIdRef.current = null;
-            grabbedStartPosRef.current = null;
           }
+          
+          grabbedIdRef.current = null;
+          grabbedStartPosRef.current = null;
         }
 
         wasPinchingRef.current = isPinching;
@@ -383,30 +378,26 @@ const Visualizer: React.FC<VisualizerProps> = ({ state, handData }) => {
         }
       }
     } else {
-      // No hand detected - cleanup visuals only
+      // No hand detected - cleanup
       svg.select('g.hand-mesh').selectAll('*').remove();
       svg.select('g.cursor-group').attr('opacity', 0);
       svg.select('line.drag-line').attr('opacity', 0);
       
-      // If was grabbing, return to original position (only once)
-      if (grabbedIdRef.current && grabbedStartPosRef.current && wasPinchingRef.current) {
+      // If was grabbing, return to original position
+      if (grabbedIdRef.current && grabbedStartPosRef.current) {
         const grabbedId = grabbedIdRef.current;
-        const originalPos = { ...grabbedStartPosRef.current };
-        
-        // Reset refs first to prevent re-triggering
-        grabbedIdRef.current = null;
-        grabbedStartPosRef.current = null;
-        
         setElementPositions(prev => ({
           ...prev,
-          [grabbedId]: originalPos
+          [grabbedId]: grabbedStartPosRef.current!
         }));
       }
       
-      // Reset interaction state
+      grabbedIdRef.current = null;
+      grabbedStartPosRef.current = null;
       hoveredIdRef.current = null;
       isPinchingRef.current = false;
       wasPinchingRef.current = false;
+      currentHandPosRef.current = null;
     }
   }, [handData, elementPositions, state]);
 

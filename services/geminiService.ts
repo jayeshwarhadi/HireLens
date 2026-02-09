@@ -4,8 +4,27 @@ import { AlgorithmType, AnimationStep } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+// Retry utility with exponential backoff
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 2000): Promise<T> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+      const msg = error?.message || '';
+      const isRetryable = msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('429');
+      if (!isRetryable || attempt === maxRetries - 1) throw error;
+      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+      console.log(`API busy, retrying in ${Math.round(delay/1000)}s... (attempt ${attempt + 2}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}
+
 export async function simulateCode(code: string, language: string, type: AlgorithmType, input: string): Promise<AnimationStep[]> {
-  const response = await ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `Analyze the following ${language} code and simulate its execution for the input "${input}". 
     Return a list of steps for visualization. 
@@ -52,7 +71,7 @@ export async function simulateCode(code: string, language: string, type: Algorit
         }
       }
     }
-  });
+  }));
 
   try {
     const rawSteps = JSON.parse(response.text);

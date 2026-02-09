@@ -191,13 +191,17 @@ const HologramRendererInline: React.FC<HologramRendererProps> = ({ metadata, cur
 
     const size = variant === 'circle' ? 'w-16 h-16' : 'w-16 h-16';
 
+    // Sanitize coordinates to prevent "Infinity" errors
+    const safeX = Number.isFinite(x) ? x : 0;
+    const safeY = Number.isFinite(y) ? y : 0;
+
     return (
       <div 
         key={idx}
         className={`absolute flex items-center justify-center transition-all duration-500 border-2 backdrop-blur-sm
           ${variant === 'circle' ? `rounded-full ${size}` : `rounded-2xl ${size}`}
           ${baseClass} cursor-grab active:cursor-grabbing group shadow-lg`}
-        style={{ left: x, top: y, transform: `translate(-50%, -50%)` }}
+        style={{ left: safeX, top: safeY, transform: `translate(-50%, -50%)` }}
       >
         <span className="text-base font-bold font-mono drop-shadow-sm">{val}</span>
       </div>
@@ -469,17 +473,49 @@ const HologramRendererInline: React.FC<HologramRendererProps> = ({ metadata, cur
       );
     }
     
-    // Check for tree structure (with normalization)
-    const isTree = struct === DataStructureType.TREE || 
-                   struct === 'Tree' ||
-                   struct?.toString().toLowerCase() === 'tree' ||
-                   metadata.name?.toLowerCase().includes('tree');
+    // Helper: Check if data appears to be a tree structure
+    const isTreeLikeData = (testData: any): boolean => {
+      if (!testData) return false;
+      
+      // Check for explicit tree properties
+      if (typeof testData === 'object') {
+        // Object with left/right (binary tree)
+        if ('left' in testData || 'right' in testData || 'l' in testData || 'r' in testData) return true;
+        // Object with children array (n-ary tree)
+        if ('children' in testData && Array.isArray(testData.children)) return true;
+        // Object with child0, child1, child2 properties (n-ary)
+        if (Object.keys(testData).some(k => k.match(/^child\d+$/i))) return true;
+      }
+      
+      // Array representation of tree (level-order or flat)
+      if (Array.isArray(testData) && testData.length > 0) {
+        // If it's an array of objects with children, it's likely a tree
+        return testData.some(item => 
+          typeof item === 'object' && item !== null && 
+          ('children' in item || 'left' in item || 'right' in item)
+        );
+      }
+      
+      return false;
+    };
+    
+    // Check for tree structure (with normalization and better detection)
+    const isTreeExplicit = struct === DataStructureType.TREE || 
+                           struct === 'Tree' ||
+                           struct?.toString().toLowerCase() === 'tree';
+    const isTreeByName = metadata.name?.toLowerCase().includes('tree') || 
+                         metadata.name?.toLowerCase().includes('binary') ||
+                         metadata.name?.toLowerCase().includes('ternary') ||
+                         metadata.name?.toLowerCase().includes('n-ary');
+    const isTreeByData = isTreeLikeData(data);
+    const isTree = isTreeExplicit || isTreeByName || isTreeByData;
                    
-    // Check for graph structure (with normalization)
-    const isGraph = struct === DataStructureType.GRAPH || 
-                    struct === 'Graph' ||
-                    struct?.toString().toLowerCase() === 'graph' ||
-                    metadata.name?.toLowerCase().includes('graph');
+    // Check for graph structure (with normalization) - AFTER tree check
+    const isGraphExplicit = struct === DataStructureType.GRAPH || 
+                            struct === 'Graph' ||
+                            struct?.toString().toLowerCase() === 'graph';
+    const isGraphByData = !isTree && (typeof data === 'object' && (data.nodes || data.edges));
+    const isGraph = isGraphExplicit || (isGraphByData && !isTree);
 
     // ARRAY or STRING visualization - horizontal blocks (only if not linked list, tree, or graph)
     if (!isLinkedList && !isTree && !isGraph && Array.isArray(data) && data.length > 0) {
@@ -505,8 +541,106 @@ const HologramRendererInline: React.FC<HologramRendererProps> = ({ metadata, cur
       const levelHeight = 90;
       const nodeRadius = 28;
       
-      // Convert array representation to tree nodes
-      if (Array.isArray(data)) {
+      // Helper: Parse object-based tree structure (nested objects with children)
+      const parseObjectTree = (node: any, parentIdx: number | null, level: number, nodeId: number): number => {
+        let currentId = nodeId;
+        
+        // Extract node value
+        const val = node.val || node.value || node.data || node;
+        
+        // Get children array from various possible property names
+        let children: any[] = [];
+        if (Array.isArray(node.children)) children = node.children;
+        else if (Array.isArray(node.child)) children = node.child;
+        else if (node.left || node.right) {
+          if (node.left) children.push(node.left);
+          if (node.right) children.push(node.right);
+        }
+        
+        // Create current node
+        const currentNodeId = currentId;
+        treeNodes.push({
+          id: currentNodeId,
+          val,
+          level,
+          x: 0,
+          y: level * levelHeight,
+          parentId: parentIdx,
+          children: []
+        });
+        
+        currentId++;
+        
+        // Recursively parse children
+        const childIds: number[] = [];
+        for (const child of children) {
+          if (child !== null && child !== undefined) {
+            const nextId = parseObjectTree(child, currentNodeId, level + 1, currentId);
+            childIds.push(currentId);
+            currentId = nextId;
+          }
+        }
+        
+        // Update with actual child IDs
+        const nodeToUpdate = treeNodes.find(n => n.id === currentNodeId);
+        if (nodeToUpdate) {
+          nodeToUpdate.children = childIds;
+        }
+        
+        return currentId;
+      };
+      
+      // Detect and parse tree format
+      if (!Array.isArray(data) && typeof data === 'object' && data !== null && 
+          (data.left || data.right || data.children || data.val || data.value)) {
+        // Object-based tree structure
+        parseObjectTree(data, null, 0, 0);
+      } else if (Array.isArray(data) && data.length > 0 && typeof data[0] === 'object' && 
+                 (data[0].children || data[0].left || data[0].right)) {
+        // Array of tree nodes with explicit children
+        data.forEach((nodeData, idx) => {
+          const val = nodeData.val || nodeData.value || nodeData.data || nodeData;
+          const children: number[] = [];
+          
+          if (Array.isArray(nodeData.children)) {
+            nodeData.children.forEach((childIdx: number) => {
+              if (childIdx < data.length) children.push(childIdx);
+            });
+          }
+          
+          treeNodes.push({
+            id: idx,
+            val,
+            level: 0, // Will be recalculated
+            x: 0,
+            y: 0,
+            parentId: null, // Will be determined
+            children
+          });
+        });
+        
+        // Calculate levels and parent IDs
+        const root = treeNodes[0];
+        const visited = new Set<number>();
+        const queue: { nodeId: number; level: number; parentId: number | null }[] = [{ nodeId: 0, level: 0, parentId: null }];
+        
+        while (queue.length > 0) {
+          const { nodeId, level, parentId } = queue.shift()!;
+          if (visited.has(nodeId)) continue;
+          visited.add(nodeId);
+          
+          const node = treeNodes.find(n => n.id === nodeId);
+          if (node) {
+            node.level = level;
+            node.parentId = parentId;
+            node.y = level * levelHeight;
+            
+            for (const childId of node.children) {
+              queue.push({ nodeId: childId, level: level + 1, parentId: nodeId });
+            }
+          }
+        }
+      } else if (Array.isArray(data)) {
         // Level-order array representation (binary tree)
         data.forEach((val: any, idx: number) => {
           if (val !== null && val !== undefined && val !== 'null') {
@@ -535,14 +669,25 @@ const HologramRendererInline: React.FC<HologramRendererProps> = ({ metadata, cur
       const calculatePositions = () => {
         const levelNodes: Map<number, typeof treeNodes> = new Map();
         
+        // Guard: if no nodes, return early
+        if (treeNodes.length === 0) {
+          return;
+        }
+        
         // Group nodes by level
         treeNodes.forEach(node => {
           if (!levelNodes.has(node.level)) levelNodes.set(node.level, []);
           levelNodes.get(node.level)!.push(node);
         });
         
-        const maxLevel = Math.max(...Array.from(levelNodes.keys()));
-        const baseSpacing = 70;
+        const levelKeys = Array.from(levelNodes.keys());
+        if (levelKeys.length === 0) return;
+        
+        const maxLevel = Math.max(...levelKeys);
+        
+        // Calculate max branching factor (children per node)
+        const maxChildren = Math.max(...treeNodes.map(n => n.children.length), 2);
+        const baseSpacing = Math.max(70, 100 / maxChildren); // Adjust spacing based on arity
         
         // Position nodes level by level, starting from bottom
         for (let level = maxLevel; level >= 0; level--) {
@@ -565,8 +710,9 @@ const HologramRendererInline: React.FC<HologramRendererProps> = ({ metadata, cur
                 // Leaf node - use level-based positioning
                 const levelNodesList = levelNodes.get(node.level) || [];
                 const idx = levelNodesList.indexOf(node);
-                const totalWidth = (levelNodesList.length - 1) * baseSpacing * Math.pow(2, maxLevel - level);
-                node.x = -totalWidth / 2 + idx * baseSpacing * Math.pow(2, maxLevel - level);
+                const levelSpacing = baseSpacing * Math.pow(maxChildren, maxLevel - level);
+                const totalWidth = (levelNodesList.length - 1) * levelSpacing;
+                node.x = -totalWidth / 2 + idx * levelSpacing;
               }
             });
           }
@@ -576,7 +722,7 @@ const HologramRendererInline: React.FC<HologramRendererProps> = ({ metadata, cur
         for (let level = 0; level <= maxLevel; level++) {
           const nodes = (levelNodes.get(level) || []).sort((a, b) => a.x - b.x);
           for (let i = 1; i < nodes.length; i++) {
-            const minGap = baseSpacing;
+            const minGap = baseSpacing * 0.8;
             if (nodes[i].x - nodes[i-1].x < minGap) {
               const shift = (minGap - (nodes[i].x - nodes[i-1].x)) / 2;
               nodes[i-1].x -= shift;
@@ -587,17 +733,33 @@ const HologramRendererInline: React.FC<HologramRendererProps> = ({ metadata, cur
         
         // Center the tree
         const allX = treeNodes.map(n => n.x);
+        if (allX.length === 0) return;
+        
         const minX = Math.min(...allX);
         const maxX = Math.max(...allX);
         const offsetX = -(minX + maxX) / 2;
         treeNodes.forEach(n => n.x += offsetX);
         
         // Offset Y to center vertically
-        const offsetY = -(maxLevel * levelHeight) / 2;
+        const allY = treeNodes.map(n => n.y);
+        if (allY.length === 0) return;
+        
+        const minY = Math.min(...allY);
+        const maxY = Math.max(...allY);
+        const offsetY = -(minY + maxY) / 2;
         treeNodes.forEach(n => n.y += offsetY);
       };
       
       calculatePositions();
+      
+      // Guard: if no nodes were parsed, show placeholder
+      if (treeNodes.length === 0) {
+        return (
+          <div className="relative flex items-center justify-center w-full h-full">
+            <div className="text-slate-400 text-lg font-semibold">No tree data to visualize</div>
+          </div>
+        );
+      }
       
       // Get the path from root to active node
       const getPathToNode = (nodeId: number): number[] => {
@@ -628,11 +790,26 @@ const HologramRendererInline: React.FC<HologramRendererProps> = ({ metadata, cur
         );
       };
       
+      // Determine tree type based on maximum children per node
+      const maxChildrenCount = Math.max(...treeNodes.map(n => n.children.length), 1);
+      let treeTypeName = 'Tree';
+      if (maxChildrenCount === 2) treeTypeName = 'Binary Tree';
+      else if (maxChildrenCount === 3) treeTypeName = 'Ternary Tree';
+      else if (maxChildrenCount > 3) treeTypeName = `${maxChildrenCount}-ary Tree`;
+      
+      // Use metadata name if available
+      if (metadata.name) {
+        const nameLower = metadata.name.toLowerCase();
+        if (nameLower.includes('binary')) treeTypeName = 'Binary Tree';
+        else if (nameLower.includes('ternary')) treeTypeName = 'Ternary Tree';
+        else if (nameLower.includes('n-ary') || nameLower.includes('nary')) treeTypeName = `N-ary Tree`;
+      }
+      
       return (
         <div className="relative">
           {/* Title */}
-          <div className="absolute left-1/2 -translate-x-1/2 text-2xl font-black text-slate-300 tracking-wider" style={{ top: Math.min(...treeNodes.map(n => n.y)) - 60 }}>
-            Tree Traversal
+          <div className="absolute left-1/2 -translate-x-1/2 text-2xl font-black text-slate-300 tracking-wider" style={{ top: treeNodes.length > 0 ? Math.min(...treeNodes.map(n => n.y)) - 60 : -60 }}>
+            {treeTypeName}
           </div>
           
           {/* Lines SVG */}
@@ -1293,52 +1470,26 @@ const App: React.FC = () => {
   // Hologram Algorithm Engine: Analyze code
   const handleHologramAnalyze = async () => {
     setIsHologramLoading(true);
-    const maxRetries = 3;
-    let lastError: Error | null = null;
     
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        console.log(`Analysis attempt ${attempt}/${maxRetries}...`);
-        const result = await analyzeAlgorithm(hologramCode, hologramInputData);
-        setAlgoMetadata(result);
-        setCurrentStepIndex(0);
-        setIsHologramPlaying(true); // Auto-start playback after analysis
-        setIsHologramLoading(false);
-        return; // Success, exit early
-      } catch (error) {
-        console.error(`Analysis attempt ${attempt} failed:`, error);
-        lastError = error instanceof Error ? error : new Error(String(error));
-        
-        // Check if error is a 503 (overloaded) or 429 (rate limit)
-        const isRetryableError = 
-          error instanceof Error && 
-          (error.message.includes('503') || 
-           error.message.includes('429') ||
-           error.message.includes('overloaded') ||
-           error.message.includes('rate limit'));
-        
-        if (isRetryableError && attempt < maxRetries) {
-          // Wait with exponential backoff: 2s, 4s, 8s
-          const waitTime = Math.pow(2, attempt) * 1000;
-          console.log(`Retrying in ${waitTime}ms...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else if (!isRetryableError || attempt === maxRetries) {
-          // Non-retryable error or max retries reached
-          break;
-        }
+    try {
+      // analyzeAlgorithm already has built-in retry logic with exponential backoff
+      const result = await analyzeAlgorithm(hologramCode, hologramInputData);
+      setAlgoMetadata(result);
+      setCurrentStepIndex(0);
+      setIsHologramPlaying(true); // Auto-start playback after analysis
+    } catch (error) {
+      console.error("Analysis failed:", error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      
+      if (errorMsg.includes('503') || errorMsg.includes('overloaded') || errorMsg.includes('UNAVAILABLE')) {
+        alert(`API Service Temporarily Unavailable\n\nThe AI service is overloaded. Please wait a moment and try again.`);
+      } else if (errorMsg.includes('429') || errorMsg.includes('rate limit')) {
+        alert(`Rate Limit Exceeded\n\nPlease wait a few moments before trying again.`);
+      } else {
+        alert(`Analysis failed: ${errorMsg}\n\nPlease check your code and input, then try again.`);
       }
-    }
-    
-    // All retries exhausted
-    setIsHologramLoading(false);
-    const errorMsg = lastError?.message || "Unknown error occurred";
-    
-    if (errorMsg.includes('503') || errorMsg.includes('overloaded')) {
-      alert(`API Service Temporarily Unavailable\n\nThe AI service is overloaded. Please wait a moment and try again.\n\nError: ${errorMsg}`);
-    } else if (errorMsg.includes('429') || errorMsg.includes('rate limit')) {
-      alert(`Rate Limit Exceeded\n\nPlease wait a few moments before trying again.\n\nError: ${errorMsg}`);
-    } else {
-      alert(`Analysis failed: ${errorMsg}\n\nPlease check your code and input, then try again.`);
+    } finally {
+      setIsHologramLoading(false);
     }
   };
 
@@ -3094,6 +3245,63 @@ CRITICAL RULES:
                            >
                              Not Now
                            </button>
+                         </div>
+                       </div>
+                     </div>
+                   )}
+
+                   {/* Recommended Learning Resources */}
+                   {richFeedback.youtubeRecs && richFeedback.youtubeRecs.length > 0 && (
+                     <div className="px-4 mb-12 no-print">
+                       <div className="glass p-10 rounded-[2.5rem] border border-white/10 shadow-2xl">
+                         <div className="flex items-center gap-3 mb-6">
+                           <div className="w-10 h-10 bg-red-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-red-600/30">
+                              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
+                           </div>
+                           <h3 className="text-xl font-black tracking-tight flex items-center gap-3">
+                             Recommended Resources
+                           </h3>
+                         </div>
+                         
+                         <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
+                           {richFeedback.youtubeRecs.map((video, i) => {
+                             const videoId = video.url.split('v=')[1]?.split('&')[0];
+                             return (
+                               <a 
+                                 key={i} 
+                                 href={video.url} 
+                                 target="_blank" 
+                                 rel="noopener noreferrer"
+                                 className="group relative rounded-2xl overflow-hidden border-2 border-white/5 hover:border-red-500/50 transition-all block bg-black/40 hover:bg-black/60"
+                               >
+                                 <div className="relative w-full pt-[56.25%] bg-slate-800">
+                                   {videoId ? (
+                                      <img
+                                        src={`https://img.youtube.com/vi/${videoId}/mqdefault.jpg`}
+                                        alt={video.title}
+                                        className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
+                                      />
+                                   ) : (
+                                      <div className="absolute inset-0 flex items-center justify-center bg-slate-800 text-slate-600">
+                                        No Thumbnail
+                                      </div>
+                                   )}
+                                   <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors">
+                                     <div className="w-10 h-10 bg-red-600 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform shadow-xl">
+                                       <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                     </div>
+                                   </div>
+                                 </div>
+                                 <div className="p-4">
+                                   <p className="text-xs font-bold text-slate-200 line-clamp-2 leading-relaxed group-hover:text-white transition-colors">{video.title}</p>
+                                   <p className="text-[10px] text-slate-500 mt-2 flex items-center gap-1">
+                                     <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                                     YouTube
+                                   </p>
+                                 </div>
+                               </a>
+                             );
+                           })}
                          </div>
                        </div>
                      </div>

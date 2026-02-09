@@ -39,13 +39,44 @@ const Visualizer: React.FC<VisualizerProps> = ({ state, handData }) => {
   // 1. DATA VISUALIZATION (Updates on State/Offsets change)
   useEffect(() => {
     if (!svgRef.current || !state) return;
+    
+    // DEBUG: Log incoming state
+    console.log("Visualizer received state:", {
+      type: state.type,
+      hasData: !!state.data,
+      dataType: typeof state.data,
+      dataKeys: state.data && typeof state.data === 'object' ? Object.keys(state.data) : 'N/A'
+    });
+
     const svg = d3.select(svgRef.current);
     const width = svgRef.current.clientWidth;
     const height = svgRef.current.clientHeight;
 
-    let mainGroup = svg.select<SVGGElement>('g.main-viz');
-    if (mainGroup.empty()) mainGroup = svg.append('g').attr('class', 'main-viz');
+    console.log("SVG dimensions:", { width, height });
 
+    let mainGroup = svg.select<SVGGElement>('g.main-viz');
+    if (mainGroup.empty()) {
+      mainGroup = svg.append('g').attr('class', 'main-viz');
+      // Set viewBox for proper scaling
+      svg.attr('viewBox', `0 0 ${width} ${height}`);
+    }
+
+    // --- GLOBAL DEBUG OVERLAY ---
+    const debugOverlay = svg.selectAll('text.global-debug').data([0]);
+    debugOverlay.enter().append('text')
+      .attr('class', 'global-debug')
+      .attr('x', 20)
+      .attr('y', 30)
+      .attr('font-size', '14px')
+      .attr('font-weight', 'bold')
+      .attr('font-family', 'monospace')
+      .attr('fill', '#00ff00')
+      .merge(debugOverlay as any)
+      .text(`[ALGO] Type: ${state.type} | Has Data: ${!!state.data} | SVG: ${width}x${height}`);
+
+    // -------------------------------------------------------------------------
+    // RENDER: ARRAY / STRINGS
+    // -------------------------------------------------------------------------
     if (state.type === AlgorithmType.ARRAY || state.type === AlgorithmType.STRINGS) {
       const data = Array.isArray(state.data) ? state.data : String(state.data).split('');
       const totalWidth = data.length * (blockW + gap) - gap;
@@ -53,6 +84,10 @@ const Visualizer: React.FC<VisualizerProps> = ({ state, handData }) => {
       // Adjusted start position to stay clear of the editor
       const startX = Math.max(width * 0.45, (width * 0.4) + (width * 0.55 - totalWidth) / 2);
       const startY = height / 2 - blockH / 2;
+
+      // Clean up previous Tree/Graph elements if any
+      mainGroup.selectAll('.link').remove();
+      mainGroup.selectAll('.node').remove();
 
       const items = mainGroup.selectAll<SVGGElement, any>('g.draggable-item')
         .data(data, (d, i) => `item-${i}`);
@@ -131,7 +166,7 @@ const Visualizer: React.FC<VisualizerProps> = ({ state, handData }) => {
 
       items.exit().remove();
 
-      // Pointers update
+      // Pointers update (Array/String)
       let ptrG = mainGroup.select<SVGGElement>('g.pointers');
       if (ptrG.empty()) ptrG = mainGroup.append('g').attr('class', 'pointers');
       
@@ -156,7 +191,218 @@ const Visualizer: React.FC<VisualizerProps> = ({ state, handData }) => {
         
         pts.exit().remove();
       }
+    } else if (state.type === AlgorithmType.BINARY_TREE) {
+      // -------------------------------------------------------------------------
+      // RENDER: BINARY TREE (Hierarchical - left/right children)
+      // -------------------------------------------------------------------------
+      console.log("[BINARY TREE MODE]", state.data);
+       
+       // Clean up Array elements
+       mainGroup.selectAll('.draggable-item').remove();
+       mainGroup.selectAll('.ptr').remove(); // Clear array pointers if any
+
+       let root: d3.HierarchyNode<any>;
+       let links: any[] = [];
+       let nodes: any[] = [];
+       
+       const treeLayout = d3.tree().nodeSize([80, 100]); // Width between siblings, Height between levels
+
+       if (state.data) {
+          try {
+            // Validate data isn't just a number or string (unless it is a leaf node represented as such)
+            const safeData = typeof state.data === 'object' ? state.data : { value: state.data };
+            console.log("[TREE] SafeData:", safeData);
+
+            root = d3.hierarchy(safeData, (d: any) => {
+               // Define children accessor
+               const children = [];
+               // Support 'left', 'l', 'right', 'r'
+               const left = d.left || d.l;
+               const right = d.right || d.r;
+               
+               if (left && typeof left === 'object') children.push(left);
+               if (right && typeof right === 'object') children.push(right);
+               
+               // Handle array of children if generic tree
+               if (Array.isArray(d.children)) return d.children;
+               if (Array.isArray(d.neighbors)) return d.neighbors; // For Graph-like trees
+               
+               return children.length ? children : null;
+            });
+
+            // Assign unique visual IDs for stable D3 transitions
+            let idCounter = 0;
+            root.each((node: any) => {
+               const val = node.data.value ?? node.data.val ?? node.data.id ?? (typeof node.data === 'object' ? '?' : node.data);
+               node._dataValue = val; // Store normalized value
+               node._vizId = node.data.id || `node-${idCounter++}_${val}`;
+            });
+
+            treeLayout(root);
+            
+            // Re-center tree in view
+            let minX = Infinity, maxX = -Infinity;
+            root.each(d => {
+               const x = (d as any).x;
+               if (x < minX) minX = x;
+               if (x > maxX) maxX = x;
+            });
+            
+            // Protect against single node or weird layout (avoid Infinity)
+            if (minX === Infinity) { minX = 0; maxX = 0; }
+            
+            const treeW = (maxX - minX) || 0;
+            const offsetX = (width / 2) - ((minX + maxX) / 2); // Center of the plotted tree to Center of Screen
+            const offsetY = 80;
+
+            console.log("[TREE] Layout computed:", { minX, maxX, offsetX, offsetY, treeWidth: treeW, svgWidth: width });
+
+            // Shift nodes
+            root.each(d => {
+              (d as any).x += offsetX;
+              (d as any).y += offsetY;
+            });
+
+            nodes = root.descendants();
+            links = root.links();
+            
+            console.log("[TREE] Final nodes:", nodes.length, "links:", links.length);
+            nodes.forEach((n, i) => console.log(`  Node ${i}:`, { x: (n as any).x, y: (n as any).y, value: (n as any)._dataValue }));
+          } catch(e) { 
+             console.error("Tree render error", e);
+             mainGroup.append('text').text(`Error: ${e}`).attr('fill', 'red').attr('y', 50).attr('x', 50).attr('font-size', '16px');
+          }
+       } else {
+         console.warn("No data for Tree visualization");
+         mainGroup.append('text').text("No Tree Data").attr('fill', '#ff0000').attr('y', 100).attr('x', width/2).attr('text-anchor', 'middle').attr('font-size', '18px').attr('font-weight', 'bold');
+       }
+
+       // --- BIG DEBUG TEXT ---
+       mainGroup.append('text')
+         .attr('class', 'tree-status')
+         .attr('x', width / 2)
+         .attr('y', 120)
+         .attr('text-anchor', 'middle')
+         .attr('fill', '#00ff00')
+         .attr('font-size', '18px')
+         .attr('font-weight', 'bold')
+         .text(`TREE: ${nodes.length} NODES | Data: ${state.data ? 'YES' : 'NO'}`);
+
+       // --- DEBUG INFO ---
+       const debugGroup = svg.selectAll('.debug-info').data([0]);
+       debugGroup.enter().append('text').attr('class', 'debug-info')
+         .attr('x', 20).attr('y', 30)
+         .attr('fill', 'lime').attr('font-size', '12px').attr('font-family', 'monospace').attr('font-weight', 'bold')
+         .merge(debugGroup as any)
+         .text(`Mode: ${state.type} | Nodes: ${nodes.length} | Data: ${state.data ? 'OK' : 'NULL'}`);
+
+       // --- 1. Render Links ---
+       // Use a key based on source-target IDs to ensure links transition correctly
+       const linkGroup = mainGroup.selectAll('.link')
+         .data(links, (d: any) => `${d.source._vizId}-${d.target._vizId}`);
+       
+       linkGroup.enter().append('path')
+         .attr('class', 'link')
+         .attr('fill', 'none')
+         .attr('stroke', '#475569') // Slate-600
+         .attr('stroke-width', 2)
+         .attr('opacity', 1)
+         .attr('d', d3.linkVertical().x((d: any) => d.source.x).y((d: any) => d.source.y) as any) // Start from parent
+         .transition().duration(400)
+         .attr('d', d3.linkVertical().x((d: any) => d.x).y((d: any) => d.y) as any);
+
+       linkGroup.exit().transition().duration(200).attr('opacity', 0).remove();
+
+       // --- 2. Render Nodes ---
+       const nodeGroup = mainGroup.selectAll('.node').data(nodes, (d: any) => d._vizId);
+       
+       const nodeEnter = nodeGroup.enter().append('g')
+         .attr('class', 'node')
+         .attr('transform', (d: any) => {
+           const x = isFinite((d as any).x) ? (d as any).x : width / 2;
+           const y = isFinite((d as any).y) ? (d as any).y : height / 2;
+           console.log(`[NODE] Creating at ${x}, ${y}`);
+           return `translate(${x},${y})`;
+         })
+         .style('opacity', 1);
+
+       nodeEnter.append('circle')
+         .attr('r', 25)
+         .attr('fill', '#1e293b') // Slate-800
+         .attr('stroke', '#6366f1') // Indigo-500
+         .attr('stroke-width', 3)
+         .style('filter', 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))');
+
+       nodeEnter.append('text')
+         .attr('dy', '0.35em')
+         .attr('text-anchor', 'middle')
+         .attr('fill', 'white')
+         .attr('font-weight', 'bold')
+         .style('pointer-events', 'none') // Ensure clicks go through text
+         .text((d: any) => d._dataValue); // Use normalized value
+
+       const nodeUpdate = nodeEnter.merge(nodeGroup as any);
+
+       nodeUpdate
+         .attr('transform', (d: any) => {
+           const x = isFinite((d as any).x) ? (d as any).x : width / 2;
+           const y = isFinite((d as any).y) ? (d as any).y : height / 2;
+           return `translate(${x},${y})`;
+         })
+         .style('opacity', 1);
+
+       nodeGroup.exit().remove();
+
+       // --- 3. Render Pointers (Labels above nodes) ---
+       let ptrG = mainGroup.select<SVGGElement>('g.pointers');
+         if (ptrG.empty()) ptrG = mainGroup.append('g').attr('class', 'pointers');
+         
+         const activePointers = [];
+         if (state.pointers) {
+             for (const [key, val] of Object.entries(state.pointers)) {
+                 const targetNode = nodes.find(n => String(n.data.value) === String(val) || (n.data.id && String(n.data.id) === String(val)));
+                 if (targetNode) {
+                     activePointers.push({ label: key, x: targetNode.x, y: targetNode.y });
+                 }
+             }
+         }
+
+         const ptrs = ptrG.selectAll<SVGTextElement, any>('text.ptr').data(activePointers, (d:any) => d.label);
+         ptrs.enter().append('text')
+           .attr('class', 'ptr')
+           .attr('text-anchor', 'middle')
+           .attr('font-size', '14px')
+           .attr('fill', '#fbbf24')
+           .attr('font-weight', '900')
+           .style('text-shadow', '0 2px 4px rgba(0,0,0,0.8)')
+           .text((d: any) => `${d.label.toUpperCase()} ↓`)
+           .merge(ptrs)
+           .transition().duration(300)
+           .attr('x', (d: any) => d.x)
+           .attr('y', (d: any) => d.y - 38);
+
+         ptrs.exit().remove();
+    } else if (state.type === AlgorithmType.GRAPH) {
+      // -------------------------------------------------------------------------
+      // RENDER: GRAPH (Network nodes with edges)
+      // -------------------------------------------------------------------------
+      console.log("[GRAPH MODE]", state.data);
+      mainGroup.selectAll('.draggable-item').remove();
+      mainGroup.selectAll('.link').remove();
+      mainGroup.selectAll('.node').remove();
+      
+      // Placeholder: Graph nodes scattered or use force simulation
+      mainGroup.append('text')
+        .attr('x', width / 2)
+        .attr('y', height / 2)
+        .attr('text-anchor', 'middle')
+        .attr('fill', '#fbbf24')
+        .attr('font-size', '18px')
+        .attr('font-weight', 'bold')
+        .text('Graph visualization (coming soon)');
     }
+
+
   }, [state, slotOffsets, handData]); // Re-render on handData to ensure hover state reflects
 
   // 2. SPATIAL INTERACTION (Hand Tracking & Dragging Loop)

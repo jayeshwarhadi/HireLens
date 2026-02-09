@@ -5,6 +5,8 @@ import { AlgorithmType, AnimationStep } from "../types";
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export async function simulateCode(code: string, language: string, type: AlgorithmType, input: string): Promise<AnimationStep[]> {
+  console.log("simulateCode called with:", { codeLen: code.length, language, type, input });
+  
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `Analyze the following ${language} code and simulate its execution for the input "${input}". 
@@ -54,9 +56,13 @@ export async function simulateCode(code: string, language: string, type: Algorit
     }
   });
 
+  console.log("Gemini response received:", response.text.substring(0, 200));
+
   try {
     const rawSteps = JSON.parse(response.text);
-    return rawSteps.map((s: any) => {
+    console.log("Parsed raw steps count:", rawSteps.length);
+    
+    const processedSteps = rawSteps.map((s: any) => {
       let parsedData;
       try {
         parsedData = JSON.parse(s.viz.data);
@@ -72,15 +78,22 @@ export async function simulateCode(code: string, language: string, type: Algorit
         parsedPointers = {};
       }
 
-      return {
+      const result = {
         ...s,
         viz: {
           ...s.viz,
+          type: type,  // IMPORTANT: Include the algorithm type so Visualizer knows how to render
           data: parsedData,
           pointers: parsedPointers
         }
       };
+      
+      console.log("Processed step:", { codeLine: result.codeLine, hasData: !!result.viz.data, dataKeys: result.viz.data && typeof result.viz.data === 'object' ? Object.keys(result.viz.data) : 'N/A' });
+      return result;
     });
+    
+    console.log("Returning", processedSteps.length, "animation steps");
+    return processedSteps;
   } catch (e) {
     console.error("Failed to parse Gemini response", e);
     return [];
