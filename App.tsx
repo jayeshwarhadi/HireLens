@@ -19,6 +19,29 @@ import CodeFeedbackDisplay from './components/CodeFeedbackDisplay';
 // Initialize PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
+// Retry utility with exponential backoff for API calls
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 2000
+): Promise<T> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+      const msg = error?.message || '';
+      const isRetryable = msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('429');
+      if (!isRetryable || attempt === maxRetries - 1) throw error;
+      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+      console.log(`API busy, retrying in ${Math.round(delay/1000)}s... (attempt ${attempt + 2}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}
+
 import { CameraView } from './components/CameraView';
 import { CodeEditor } from './components/CodeEditor';
 import { TeachingAnimation } from './components/TeachingAnimation';
@@ -1838,8 +1861,8 @@ const App: React.FC = () => {
     - youtubeRecs (array of relevant learning resources)`;
 
     try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+      const response = await withRetry(() => ai.models.generateContent({
+        model: 'gemini-2.0-flash',
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
@@ -1891,17 +1914,22 @@ const App: React.FC = () => {
             required: ['overallScore', 'communication', 'technical', 'fluency', 'postureScore', 'speechAnalysis', 'postureAnalysis', 'improvementSuggestions', 'history', 'youtubeRecs']
           }
         }
-      });
+      }), 3, 2000);
 
       const feedbackData = JSON.parse(response.text || '{}');
       setRichFeedback(feedbackData);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Feedback error:", error);
+      const isServiceBusy = error?.message?.includes('503') || error?.message?.includes('429') || error?.message?.includes('UNAVAILABLE');
       setRichFeedback({
         overallScore: 65, communication: 70, technical: 60, fluency: 75, postureScore: 80,
-        speechAnalysis: "System error during analysis. Manual review suggested.",
-        postureAnalysis: "Data corrupted.",
-        improvementSuggestions: ["Check API credentials", "Ensure stable connection"],
+        speechAnalysis: isServiceBusy 
+          ? "The AI service is temporarily busy. Please try 'End Audit' again in a moment." 
+          : "System error during analysis. Manual review suggested.",
+        postureAnalysis: isServiceBusy ? "Pending - service busy" : "Data corrupted.",
+        improvementSuggestions: isServiceBusy 
+          ? ["Wait 30 seconds and try again", "The AI service is experiencing high traffic"]
+          : ["Check API credentials", "Ensure stable connection"],
         history: [], youtubeRecs: []
       });
     } finally {

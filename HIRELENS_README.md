@@ -151,22 +151,6 @@ GEMINI_API_KEY=your_key_here
 npm run dev
 ```
 
-The app will open at `http://localhost:3000`
-
----
-
-## 🚀 Deployment to Vercel
-
-Ready to deploy? Follow the [**Vercel Deployment Guide**](./VERCEL_DEPLOYMENT.md) for step-by-step instructions.
-
-### Quick Summary:
-1. Push code to GitHub
-2. Connect repo to Vercel
-3. Set `GEMINI_API_KEY` environment variable
-4. Deploy (automatic or manual)
-
-**Live in ~2 minutes!**
-
 ---
 
 ## 🔄 System Workflow
