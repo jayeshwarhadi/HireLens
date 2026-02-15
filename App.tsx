@@ -19,7 +19,15 @@ import CodeFeedbackDisplay from './components/CodeFeedbackDisplay';
 // Initialize PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
-// Retry utility with exponential backoff for API calls
+// Parse "Please retry in 52.978189848s" from 429 error message (ms)
+function parse429RetryDelayMs(message: string): number | null {
+  const match = message.match(/retry in (\d+(?:\.\d+)?)\s*s/i) || message.match(/(\d+(?:\.\d+)?)\s*s/i);
+  if (!match) return null;
+  const sec = parseFloat(match[1]);
+  return Number.isFinite(sec) ? Math.min(sec * 1000, 65000) : null; // cap 65s
+}
+
+// Retry utility with exponential backoff for API calls; for 429 uses API-suggested delay
 async function withRetry<T>(
   fn: () => Promise<T>,
   maxRetries: number = 3,
@@ -34,9 +42,10 @@ async function withRetry<T>(
       const msg = error?.message || '';
       const isRetryable = msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('429');
       if (!isRetryable || attempt === maxRetries - 1) throw error;
-      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
-      console.log(`API busy, retrying in ${Math.round(delay/1000)}s... (attempt ${attempt + 2}/${maxRetries})`);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      const is429 = msg.includes('429');
+      const delayMs = is429 ? (parse429RetryDelayMs(msg) ?? 55000) : baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+      console.log(`API busy${is429 ? ' (429 quota)' : ''}, retrying in ${Math.round(delayMs/1000)}s... (attempt ${attempt + 2}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
   throw lastError;
@@ -1914,22 +1923,28 @@ const App: React.FC = () => {
             required: ['overallScore', 'communication', 'technical', 'fluency', 'postureScore', 'speechAnalysis', 'postureAnalysis', 'improvementSuggestions', 'history', 'youtubeRecs']
           }
         }
-      }), 3, 2000);
+      }), 4, 2000); // 4 attempts; on 429 we wait API-suggested ~55s then retry
 
       const feedbackData = JSON.parse(response.text || '{}');
       setRichFeedback(feedbackData);
     } catch (error: any) {
       console.error("Feedback error:", error);
-      const isServiceBusy = error?.message?.includes('503') || error?.message?.includes('429') || error?.message?.includes('UNAVAILABLE');
+      const msg = error?.message || '';
+      const is429 = msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED');
+      const isServiceBusy = msg.includes('503') || msg.includes('429') || msg.includes('UNAVAILABLE') || msg.includes('quota');
       setRichFeedback({
         overallScore: 65, communication: 70, technical: 60, fluency: 75, postureScore: 80,
-        speechAnalysis: isServiceBusy 
-          ? "The AI service is temporarily busy. Please try 'End Audit' again in a moment." 
-          : "System error during analysis. Manual review suggested.",
-        postureAnalysis: isServiceBusy ? "Pending - service busy" : "Data corrupted.",
-        improvementSuggestions: isServiceBusy 
-          ? ["Wait 30 seconds and try again", "The AI service is experiencing high traffic"]
-          : ["Check API credentials", "Ensure stable connection"],
+        speechAnalysis: is429
+          ? "API rate limit (429) reached. Please wait about one minute, then tap 'End Audit' again to generate the full dossier. You can still export this summary as PDF."
+          : isServiceBusy
+            ? "The AI service is temporarily busy. Please try 'End Audit' again in a moment."
+            : "System error during analysis. Manual review suggested.",
+        postureAnalysis: isServiceBusy ? "Pending — retry in a minute" : "Data unavailable.",
+        improvementSuggestions: is429
+          ? ["Wait ~60 seconds and tap 'End Audit' again", "Or export this page as PDF for now"]
+          : isServiceBusy
+            ? ["Wait 30 seconds and try again", "The AI service is experiencing high traffic"]
+            : ["Check API credentials", "Ensure stable connection"],
         history: [], youtubeRecs: []
       });
     } finally {
